@@ -53,6 +53,7 @@ cp .env.example .env      # isi OPENAI_BASE_URL + OPENAI_API_KEY
 uv run --env-file .env python -m demo.agent        # agent + custom tool
 uv run --env-file .env python -m demo.structured   # output Pydantic dari teks struk
 uv run --env-file .env python -m demo.multiagent   # Graph 2 node (ada juga demo_swarm())
+uv run --env-file .env python -m demo.a2a_tools    # agent-to-agent: agent sebagai tool
 ```
 
 `uv --env-file` baca `.env` tanpa perlu dependency `python-dotenv`.
@@ -134,6 +135,80 @@ print(swarm("Jelaskan kenapa kopi bikin melek."))
 Bedanya: **Graph** = kamu tentukan urutan; **Swarm** = agent yang pilih siapa lanjut.
 Swarm butuh `name=` unik per agent dan `max_handoffs` sebagai rem biaya.
 
+### 4. Agent-to-agent: agent sebagai tool (`demo/a2a_tools.py`)
+
+Ini pola **agent-to-agent** paling murah di Strands: tidak ada jaringan, tidak ada
+protokol. Spesialis dibungkus `agent.as_tool()`, lalu orkestrator memilih berdasarkan
+`description` — bukan berdasarkan nama fungsi.
+
+```python
+from strands import Agent, tool
+
+@tool
+def hitung_ppn(nilai: float, tarif_persen: float = 11.0) -> dict:
+    """Hitung PPN dari nilai dasar."""
+    ppn = nilai * tarif_persen / 100
+    return {"ppn": round(ppn, 2), "total": round(nilai + ppn, 2)}
+
+spesialis_pajak = Agent(
+    model=get_model(),
+    name="spesialis_pajak",
+    description="Menghitung PPN 11%. Pakai untuk pertanyaan pajak/PPN.",
+    system_prompt="Kamu spesialis perpajakan. Selalu pakai tool hitung_ppn.",
+    tools=[hitung_ppn],
+)
+
+orkestrator = Agent(
+    model=get_model(),
+    system_prompt="Kamu manajer. Panggil spesialis yang tepat, lalu rangkum.",
+    tools=[spesialis_pajak.as_tool(name="tanya_pajak")],
+)
+
+print(orkestrator("Hitung PPN dari 1.000.000."))
+```
+
+Tiga knob yang penting di `as_tool()`:
+
+| argumen | efek |
+|---|---|
+| `name` / `description` | `description` yang dipakai model untuk routing. Deskripsi kabur = spesialis tidak pernah dipanggil |
+| `preserve_context=False` (default) | state sub-agent di-reset tiap panggilan; `True` = sub-agent ingat percakapan sebelumnya |
+| `delegate=True` | hasil sub-agent langsung jadi jawaban akhir, orkestrator tidak menambah 1 call model |
+
+Output nyata (`deepseek-flash` lewat gateway lokal):
+
+```
+=== 1. DASAR: orkestrator + 2 spesialis ===
+jawaban : Harga telur 1 kg Rp 32.000, 2 kg Rp 64.000, PPN 11% Rp 7.040, total Rp 71.040
+tools   : tanya_harga=1x, tanya_pajak=1x
+cycles  : 3 | token: 3226
+
+=== 2. preserve_context: state sub-agent antar panggilan ===
+preserve_context=0     | messages sub-agent=0  | jawaban ke-2: Budi.
+preserve_context=1     | messages sub-agent=4  | jawaban ke-2: Nama kamu Budi.
+
+=== 3. delegate=True: hasil sub-agent jadi jawaban akhir ===
+jawaban : DPP 1.000.000 -> PPN 110.000 (11%), total 1.110.000
+tools   : hitung_pajak=1x
+cycles  : 1
+```
+
+Bacaan penting dari output itu:
+
+- `preserve_context=False` → `messages` sub-agent **0**: sub-agent amnesia, tapi jawaban
+  masih benar karena orkestrator yang mengingat konteks dan mengirim ulang pertanyaannya.
+- `preserve_context=True` → `messages` **4**: sub-agent punya riwayat sendiri. Ini yang bikin
+  token naik terus kalau dipakai untuk chat panjang.
+- `delegate=True` → `cycles=1`. Tanpa delegate, satu panggilan agent-tool = minimal 2 cycle
+  (satu untuk tool, satu untuk merangkum).
+
+Bedanya dengan `demo/multiagent.py`: `Swarm`/`Graph` menyerahkan **kontrol** ke agent lain
+(handoff, urutan node), sedangkan `as_tool()` cuma meminjam **kemampuan** — kontrol tetap di
+orkestrator. Untuk 90% kasus, `as_tool()` lebih murah dan lebih mudah di-debug.
+
+Kalau butuh agent lintas **proses/mesin**, itu domain protokol A2A (`strands.multiagent.a2a`
++ paket `a2a-sdk`), bukan `as_tool()`. Di repo ini belum dipakai karena butuh server HTTP.
+
 ## Pitfall yang sudah kena saat bikin catatan ini
 
 1. **`reasoningContent is not supported in multi-turn conversations with the Chat
@@ -150,6 +225,15 @@ Swarm butuh `name=` unik per agent dan `max_handoffs` sebagai rem biaya.
    untuk Bedrock** — `from strands.models import BedrockModel`,
    `from strands.models.litellm import LiteLLMModel`.
 6. Swarm tanpa `max_handoffs`/`max_iterations` bisa muter-muter dan bakar token.
+7. **`as_tool()` routing bergantung pada `description`** — model memilih agent-tool dari
+   deskripsi, bukan nama. Deskripsi generik ("agent pembantu") = tidak pernah dipanggil,
+   atau dipanggil untuk hal yang salah. Tulis "Pakai untuk ..." secara eksplisit.
+8. **`preserve_context=True` bikin token naik terus** — riwayat sub-agent ikut terbawa tiap
+   panggilan. Untuk chat panjang, biarkan `False` dan kirim konteks dari orkestrator.
+9. **Agent-tool tanpa `delegate=True` = minimal 2 cycle** (tool call + rangkuman). Kalau
+   jawaban sub-agent sudah final, pakai `delegate=True` supaya hemat satu call model.
+10. **Streaming default berisik** — `Agent(callback_handler=None)` kalau mau output bersih
+    (tanpa blok `Tool #1: ...` dan teks reasoning di terminal).
 
 ## Biaya & keamanan
 
