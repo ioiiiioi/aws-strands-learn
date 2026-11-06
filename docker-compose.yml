@@ -1,0 +1,28 @@
+services:
+  aws-strands-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aws-strands-api
+    restart: unless-stopped
+    ports:
+      - "8300:8000"
+    env_file:
+      - .env
+    environment:
+      # host disesuaikan ke service di utils/docker-compose.yml (network app-network)
+      DATABASE_DSN: postgresql://postgres:password@postgres_container:5432/skillsbary
+      OPENAI_BASE_URL: http://omniroute_container:20128/v1
+      APP_ENV: production
+    networks:
+      - utils_app-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/openapi.json')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+networks:
+  utils_app-network:
+    external: true

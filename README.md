@@ -270,3 +270,23 @@ agent = Agent(
 Diuji di mesin ini: `strands-agents 1.63.0`, Python 3.12, model
 `deepseek/deepseek-flash` via gateway lokal `http://localhost:20128/v1`.
 Ketiga sample dijalankan dan keluarannya yang tercatat di atas.
+
+## Jalankan sebagai container (API saja)
+
+`Dockerfile` + `docker-compose.yml` hanya membungkus FastAPI (`app/api/main.py`),
+tidak ada container database — DB numpang ke Postgres general yang sudah ada
+(`~/Documents/utils/docker-compose.yml`), LLM numpang ke OmniRoute.
+
+```bash
+docker compose build
+docker compose up -d
+curl localhost:8300/skills      # 200, agent jalan
+docker logs -f aws-strands-api
+```
+
+Yang penting di `docker-compose.yml`:
+- `networks: utils_app-network (external)` → nama service `postgres_container` dan
+  `omniroute_container` resolve, jadi host `localhost` **tidak** dipakai di dalam container.
+- `DATABASE_DSN=postgresql://postgres:<pw>@postgres_container:5432/skillsbary`
+- `OPENAI_BASE_URL=http://omniroute_container:20128/v1`
+- Port host `8300` → container `8000`.
