@@ -271,6 +271,35 @@ Diuji di mesin ini: `strands-agents 1.63.0`, Python 3.12, model
 `deepseek/deepseek-flash` via gateway lokal `http://localhost:20128/v1`.
 Ketiga sample dijalankan dan keluarannya yang tercatat di atas.
 
+## Jalankan API dari root (`main.py`)
+
+`main.py` di root repo membungkus uvicorn untuk app `app.api.main:app`. Port default
+`8000`, bisa diganti lewat env `PORT`. Reloader hanya aktif kalau `APP_ENV=development`.
+
+```bash
+cd aws-strands
+cp .env.example .env            # isi DATABASE_DSN + OPENAI_BASE_URL + OPENAI_API_KEY
+uv run --env-file .env python main.py            # -> http://localhost:8000
+PORT=8301 uv run --env-file .env python main.py  # kalau 8000 sudah dipakai
+```
+
+Cek jalan:
+
+```bash
+curl localhost:8000/openapi.json     # {"title":"Skill Bary API", paths: /skills}
+curl "localhost:8000/skills?q=token" # agent pilih 1 skill + alasan
+```
+
+Padanan tanpa reloader untuk produksi:
+
+```bash
+uv run --env-file .env fastapi run app/api/main.py
+```
+
+Catatan: `main.py` baca `.env` **hanya** karena `--env-file`; tanpa flag itu,
+`app/core/config.py` masih punya default `localhost` (DB & OmniRoute) yang tidak
+resolve di dalam container — untuk container pakai compose di bawah.
+
 ## Jalankan sebagai container (API saja)
 
 `Dockerfile` + `docker-compose.yml` hanya membungkus FastAPI (`app/api/main.py`),
